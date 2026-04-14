@@ -1,1 +1,80 @@
+name: 🎬 Video Upscaler
 
+on:
+  push:
+    paths:
+      - 'input/*.mp4'
+      - 'input/*.MP4'
+
+jobs:
+  upscale:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg
+
+      - name: Find input video
+        id: find_video
+        run: |
+          VIDEO=$(ls input/*.mp4 input/*.MP4 2>/dev/null | head -1)
+          if [ -z "$VIDEO" ]; then
+            echo "❌ No .mp4 file found in input/ folder"
+            exit 1
+          fi
+          echo "Found: $VIDEO"
+          echo "video_path=$VIDEO" >> $GITHUB_OUTPUT
+          echo "video_name=$(basename $VIDEO .mp4)" >> $GITHUB_OUTPUT
+
+      - name: Detect resolution setting
+        id: resolution
+        run: |
+          if [ -f "input/4k.txt" ]; then
+            echo "target=4k"   >> $GITHUB_OUTPUT
+            echo "width=3840"  >> $GITHUB_OUTPUT
+            echo "height=2160" >> $GITHUB_OUTPUT
+            echo "🎯 Target: 4K (3840x2160)"
+          else
+            echo "target=2k"   >> $GITHUB_OUTPUT
+            echo "width=2560"  >> $GITHUB_OUTPUT
+            echo "height=1440" >> $GITHUB_OUTPUT
+            echo "🎯 Target: 2K (2560x1440)"
+          fi
+
+      - name: Upscale video
+        run: |
+          mkdir -p output
+
+          INPUT="${{ steps.find_video.outputs.video_path }}"
+          OUTPUT="output/${{ steps.find_video.outputs.video_name }}_${{ steps.resolution.outputs.target }}.mp4"
+          WIDTH="${{ steps.resolution.outputs.width }}"
+          HEIGHT="${{ steps.resolution.outputs.height }}"
+
+          echo "📹 Input:  $INPUT"
+          echo "🎬 Output: $OUTPUT"
+          echo "📐 Size:   ${WIDTH}x${HEIGHT}"
+
+          ffmpeg -y \
+            -i "$INPUT" \
+            -vf "scale=${WIDTH}:${HEIGHT}:flags=lanczos,unsharp=5:5:1.5:5:5:0.0" \
+            -c:v libx264 \
+            -crf 18 \
+            -preset fast \
+            -c:a copy \
+            "$OUTPUT"
+
+          echo "✅ Done! Output size:"
+          ls -lh output/
+
+      - name: Upload upscaled video
+        uses: actions/upload-artifact@v4
+        with:
+          name: upscaled-${{ steps.find_video.outputs.video_name }}-${{ steps.resolution.outputs.target }}
+          path: output/
+          retention-days: 7
