@@ -36,40 +36,54 @@ jobs:
         id: resolution
         run: |
           if [ -f "input/4k.txt" ]; then
-            echo "target=4k"   >> $GITHUB_OUTPUT
-            echo "width=3840"  >> $GITHUB_OUTPUT
-            echo "height=2160" >> $GITHUB_OUTPUT
-            echo "🎯 Target: 4K (3840x2160)"
+            echo "target=4k"  >> $GITHUB_OUTPUT
+            echo "scale=3840" >> $GITHUB_OUTPUT
+            echo "🎯 Target: 4K"
           else
-            echo "target=2k"   >> $GITHUB_OUTPUT
-            echo "width=2560"  >> $GITHUB_OUTPUT
-            echo "height=1440" >> $GITHUB_OUTPUT
-            echo "🎯 Target: 2K (2560x1440)"
+            echo "target=2k"  >> $GITHUB_OUTPUT
+            echo "scale=2560" >> $GITHUB_OUTPUT
+            echo "🎯 Target: 2K"
           fi
 
-      - name: Upscale video
+      - name: Upscale video (aspect ratio preserved)
         run: |
           mkdir -p output
 
           INPUT="${{ steps.find_video.outputs.video_path }}"
           OUTPUT="output/${{ steps.find_video.outputs.video_name }}_${{ steps.resolution.outputs.target }}.mp4"
-          WIDTH="${{ steps.resolution.outputs.width }}"
-          HEIGHT="${{ steps.resolution.outputs.height }}"
+          SCALE="${{ steps.resolution.outputs.scale }}"
 
-          echo "📹 Input:  $INPUT"
-          echo "🎬 Output: $OUTPUT"
-          echo "📐 Size:   ${WIDTH}x${HEIGHT}"
+          # Detect portrait vs landscape
+          VID_W=$(ffprobe -v error -select_streams v:0 \
+            -show_entries stream=width -of csv=p=0 "$INPUT")
+          VID_H=$(ffprobe -v error -select_streams v:0 \
+            -show_entries stream=height -of csv=p=0 "$INPUT")
+
+          echo "📹 Input:  $INPUT  (${VID_W}x${VID_H})"
+
+          if [ "$VID_H" -gt "$VID_W" ]; then
+            echo "📱 Portrait / YouTube Shorts — scaling by height, width auto"
+            VF="scale=-2:${SCALE}:flags=lanczos,unsharp=5:5:1.5:5:5:0.0"
+          else
+            echo "🖥️ Landscape — scaling by width, height auto"
+            VF="scale=${SCALE}:-2:flags=lanczos,unsharp=5:5:1.5:5:5:0.0"
+          fi
 
           ffmpeg -y \
             -i "$INPUT" \
-            -vf "scale=${WIDTH}:${HEIGHT}:flags=lanczos,unsharp=5:5:1.5:5:5:0.0" \
+            -vf "$VF" \
             -c:v libx264 \
             -crf 18 \
             -preset fast \
             -c:a copy \
             "$OUTPUT"
 
-          echo "✅ Done! Output size:"
+          FINAL_W=$(ffprobe -v error -select_streams v:0 \
+            -show_entries stream=width -of csv=p=0 "$OUTPUT")
+          FINAL_H=$(ffprobe -v error -select_streams v:0 \
+            -show_entries stream=height -of csv=p=0 "$OUTPUT")
+
+          echo "✅ Done! Output: ${FINAL_W}x${FINAL_H}"
           ls -lh output/
 
       - name: Upload upscaled video
