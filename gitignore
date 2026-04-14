@@ -1,0 +1,11 @@
+# Never commit these
+.env
+downloads/
+outputs/
+__pycache__/
+*.pyc
+*.pyo
+
+# Allow videos in input/ folder (needed for the upscaler trigger)
+!input/*.mp4
+!input/*.MP4
