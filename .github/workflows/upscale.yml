@@ -1,1 +1,122 @@
+name: 🎬 Video Upscaler
 
+on:
+  push:
+    paths:
+      - 'input/url.txt'    # trigger when you update the URL file
+      - 'input/*.mp4'
+      - 'input/*.MP4'
+
+jobs:
+  upscale:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install FFmpeg + yt-dlp
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg python3-pip
+          pip3 install -q yt-dlp
+
+      # ── MODE 1: Download from URL ─────────────────────────────────────────
+      - name: Download video from URL (if url.txt exists)
+        id: download
+        run: |
+          mkdir -p input_video
+
+          if [ -f "input/url.txt" ]; then
+            URL=$(cat input/url.txt | tr -d '[:space:]')
+            echo "🔗 URL found: $URL"
+
+            yt-dlp \
+              --no-playlist \
+              --format "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" \
+              --merge-output-format mp4 \
+              --output "input_video/video.mp4" \
+              "$URL"
+
+            echo "video_path=input_video/video.mp4" >> $GITHUB_OUTPUT
+            echo "video_name=video" >> $GITHUB_OUTPUT
+            echo "✅ Downloaded from URL"
+
+          else
+            # fallback: use uploaded mp4
+            VIDEO=$(ls input/*.mp4 input/*.MP4 2>/dev/null | head -1)
+            if [ -z "$VIDEO" ]; then
+              echo "❌ No url.txt or .mp4 file found in input/ folder"
+              exit 1
+            fi
+            cp "$VIDEO" input_video/video.mp4
+            echo "video_path=input_video/video.mp4" >> $GITHUB_OUTPUT
+            echo "video_name=$(basename $VIDEO .mp4)" >> $GITHUB_OUTPUT
+            echo "✅ Using uploaded file: $VIDEO"
+          fi
+
+      # ── Resolution target ─────────────────────────────────────────────────
+      - name: Detect resolution setting
+        id: resolution
+        run: |
+          if [ -f "input/4k.txt" ]; then
+            echo "target=4k"  >> $GITHUB_OUTPUT
+            echo "scale=3840" >> $GITHUB_OUTPUT
+            echo "🎯 Target: 4K"
+          else
+            echo "target=2k"  >> $GITHUB_OUTPUT
+            echo "scale=2560" >> $GITHUB_OUTPUT
+            echo "🎯 Target: 2K"
+          fi
+
+      # ── Upscale ───────────────────────────────────────────────────────────
+      - name: Upscale video (aspect ratio preserved)
+        run: |
+          mkdir -p output
+
+          INPUT="${{ steps.download.outputs.video_path }}"
+          NAME="${{ steps.download.outputs.video_name }}"
+          TARGET="${{ steps.resolution.outputs.target }}"
+          SCALE="${{ steps.resolution.outputs.scale }}"
+          OUTPUT="output/${NAME}_${TARGET}.mp4"
+
+          VID_W=$(ffprobe -v error -select_streams v:0 \
+            -show_entries stream=width -of csv=p=0 "$INPUT")
+          VID_H=$(ffprobe -v error -select_streams v:0 \
+            -show_entries stream=height -of csv=p=0 "$INPUT")
+
+          echo "📹 Original size: ${VID_W}x${VID_H}"
+
+          if [ "$VID_H" -gt "$VID_W" ]; then
+            echo "📱 Portrait — YouTube Short / Instagram Reel"
+            VF="scale=-2:${SCALE}:flags=lanczos,unsharp=5:5:1.5:5:5:0.0"
+          else
+            echo "🖥️ Landscape"
+            VF="scale=${SCALE}:-2:flags=lanczos,unsharp=5:5:1.5:5:5:0.0"
+          fi
+
+          ffmpeg -y \
+            -i "$INPUT" \
+            -vf "$VF" \
+            -c:v libx264 \
+            -crf 18 \
+            -preset fast \
+            -c:a copy \
+            "$OUTPUT"
+
+          FINAL_W=$(ffprobe -v error -select_streams v:0 \
+            -show_entries stream=width -of csv=p=0 "$OUTPUT")
+          FINAL_H=$(ffprobe -v error -select_streams v:0 \
+            -show_entries stream=height -of csv=p=0 "$OUTPUT")
+
+          echo "✅ Done! Output: ${FINAL_W}x${FINAL_H}"
+          ls -lh output/
+
+      # ── Upload result ─────────────────────────────────────────────────────
+      - name: Upload upscaled video
+        uses: actions/upload-artifact@v4
+        with:
+          name: upscaled-${{ steps.download.outputs.video_name }}-${{ steps.resolution.outputs.target }}
+          path: output/
+          retention-days: 7
